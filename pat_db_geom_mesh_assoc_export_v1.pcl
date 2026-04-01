@@ -1,0 +1,434 @@
+$ ============================================================
+$ File:
+$   pat_db_geom_mesh_assoc_export_v1.pcl
+$
+$ Purpose:
+$   Export hierarchy and raw node picklists for:
+$     Solid -> Solid.i (faces) -> Solid.i.j (edges)
+$
+$ Output 1:
+$   geometry_hierarchy.csv
+$
+$ Output 2:
+$   geometry_nodes.csv
+$
+$ Format changes in this version:
+$   - geometry_id / parent_geometry_id / main_geometry_id
+$     are exported WITHOUT the "Solid " prefix.
+$       Example:
+$         1
+$         1.2
+$         1.2.3
+$
+$   - node_picklist is exported WITHOUT the "Node " prefix.
+$       Example:
+$         88,90:103
+$     instead of
+$         Node 88 90:103
+$
+$ Notes:
+$   - This version expects a root like "Solid 1"
+$   - geometry_type distinguishes SOLID / SURFACE / EDGE
+$ ============================================================
+
+
+FUNCTION csv_write_hierarchy_header( i_chan )
+INTEGER i_chan
+INTEGER i_stat
+
+i_stat = text_write_string( i_chan, @
+"main_geometry_id,parent_geometry_id,geometry_id,geometry_type,level" )
+
+END FUNCTION
+
+
+FUNCTION csv_write_nodes_header( i_chan )
+INTEGER i_chan
+INTEGER i_stat
+
+i_stat = text_write_string( i_chan, @
+"main_geometry_id,parent_geometry_id,geometry_id,geometry_type,level,node_picklist" )
+
+END FUNCTION
+
+
+FUNCTION normalize_geometry_label( s_in, s_out )
+STRING s_in[]
+STRING s_out[]
+
+INTEGER i_len
+
+s_out = s_in
+
+IF ( str_index( s_out, "Solid " ) == 1 ) THEN
+  i_len = str_length( s_out )
+  IF ( i_len > 6 ) THEN
+    s_out = str_substr( s_out, 7, i_len - 6 )
+  ELSE
+    s_out = ""
+  END IF
+END IF
+
+IF ( str_index( s_out, "Surface " ) == 1 ) THEN
+  i_len = str_length( s_out )
+  IF ( i_len > 8 ) THEN
+    s_out = str_substr( s_out, 9, i_len - 8 )
+  ELSE
+    s_out = ""
+  END IF
+END IF
+
+IF ( str_index( s_out, "Curve " ) == 1 ) THEN
+  i_len = str_length( s_out )
+  IF ( i_len > 6 ) THEN
+    s_out = str_substr( s_out, 7, i_len - 6 )
+  ELSE
+    s_out = ""
+  END IF
+END IF
+
+END FUNCTION
+
+
+FUNCTION normalize_node_picklist( s_in, s_out )
+STRING s_in[]
+STRING s_out[]
+
+INTEGER i_len
+
+s_out = s_in
+
+IF ( str_index( s_out, "Node " ) == 1 ) THEN
+  i_len = str_length( s_out )
+  IF ( i_len > 5 ) THEN
+    s_out = str_substr( s_out, 6, i_len - 5 )
+  ELSE
+    s_out = ""
+  END IF
+END IF
+
+END FUNCTION
+
+
+FUNCTION write_hierarchy_row( s_main_geo, s_parent_geo, s_geo, s_type, @
+ i_level, i_chan )
+
+STRING  s_main_geo[]
+STRING  s_parent_geo[]
+STRING  s_geo[]
+STRING  s_type[]
+INTEGER i_level
+INTEGER i_chan
+
+STRING  s_line[VIRTUAL]
+STRING  s_main_norm[128]
+STRING  s_parent_norm[128]
+STRING  s_geo_norm[128]
+INTEGER i_stat
+
+normalize_geometry_label( s_main_geo,   s_main_norm )
+normalize_geometry_label( s_parent_geo, s_parent_norm )
+normalize_geometry_label( s_geo,        s_geo_norm )
+
+s_line = s_main_norm // "," // s_parent_norm // "," // s_geo_norm // "," // @
+ s_type // "," // str_from_integer( i_level )
+
+i_stat = text_write_string( i_chan, s_line )
+
+END FUNCTION
+
+
+FUNCTION write_nodes_row( s_main_geo, s_parent_geo, s_geo, s_type, @
+ i_level, i_chan )
+
+STRING  s_main_geo[]
+STRING  s_parent_geo[]
+STRING  s_geo[]
+STRING  s_type[]
+INTEGER i_level
+INTEGER i_chan
+
+STRING  sv_nodes[VIRTUAL]
+STRING  s_nodes_norm[VIRTUAL]
+STRING  s_line[VIRTUAL]
+STRING  s_main_norm[128]
+STRING  s_parent_norm[128]
+STRING  s_geo_norm[128]
+
+INTEGER i_ret
+INTEGER i_stat
+
+normalize_geometry_label( s_main_geo,   s_main_norm )
+normalize_geometry_label( s_parent_geo, s_parent_norm )
+normalize_geometry_label( s_geo,        s_geo_norm )
+
+uil_list_a.clear()
+
+i_ret = list_create_node_ass_geo( s_geo, "lista", sv_nodes )
+
+IF ( i_ret != 0 ) THEN
+  WRITE_LINE( "* WARNING: node association failed for " // s_geo // @
+   " ; ret=" // str_from_integer( i_ret ) )
+
+  s_line = s_main_norm // "," // s_parent_norm // "," // s_geo_norm // "," // @
+   s_type // "," // str_from_integer( i_level ) // ","
+
+  i_stat = text_write_string( i_chan, s_line )
+  RETURN
+END IF
+
+IF ( str_length( sv_nodes ) <= 0 ) THEN
+  s_line = s_main_norm // "," // s_parent_norm // "," // s_geo_norm // "," // @
+   s_type // "," // str_from_integer( i_level ) // ","
+ELSE
+  normalize_node_picklist( sv_nodes, s_nodes_norm )
+
+  s_line = s_main_norm // "," // s_parent_norm // "," // s_geo_norm // "," // @
+   s_type // "," // str_from_integer( i_level ) // "," // s_nodes_norm
+END IF
+
+i_stat = text_write_string( i_chan, s_line )
+
+IF ( str_length( sv_nodes ) > 0 ) THEN
+  sys_free_string( sv_nodes )
+END IF
+
+IF ( str_length( s_nodes_norm ) > 0 ) THEN
+  sys_free_string( s_nodes_norm )
+END IF
+
+END FUNCTION
+
+
+FUNCTION write_geom_record( s_main_geo, s_parent_geo, s_geo, s_type, @
+ i_level, i_hchan, i_nchan )
+
+STRING  s_main_geo[]
+STRING  s_parent_geo[]
+STRING  s_geo[]
+STRING  s_type[]
+INTEGER i_level
+INTEGER i_hchan
+INTEGER i_nchan
+
+write_hierarchy_row( s_main_geo, s_parent_geo, s_geo, s_type, @
+ i_level, i_hchan )
+
+write_nodes_row( s_main_geo, s_parent_geo, s_geo, s_type, @
+ i_level, i_nchan )
+
+END FUNCTION
+
+
+FUNCTION export_faces_and_edges_of_solid( s_root_geo, i_hchan, i_nchan )
+
+STRING  s_root_geo[]
+INTEGER i_hchan
+INTEGER i_nchan
+
+INTEGER status
+INTEGER handle
+INTEGER method
+INTEGER attribute
+
+INTEGER solid_id(1)
+
+INTEGER nfaces
+INTEGER num_edges
+INTEGER number_loops
+
+INTEGER faces(VIRTUAL)
+INTEGER dummy(VIRTUAL)
+INTEGER loop_ids(VIRTUAL)
+INTEGER edge_ids(VIRTUAL)
+INTEGER edge_orients(VIRTUAL)
+
+INTEGER j
+INTEGER k
+
+STRING  s_face_name[128]
+STRING  s_edge_name[128]
+
+method = 4
+attribute = 1
+
+status = lp_eval( s_root_geo, method, handle )
+
+IF ( status != 0 ) THEN
+  WRITE_LINE( "* ERROR: lp_eval failed for " // s_root_geo // @
+   " ; status=" // str_from_integer(status) )
+  RETURN
+END IF
+
+status = lp_sublist_attribute_get_int( handle, attribute, solid_id )
+lp_eval_cleanup( handle )
+
+IF ( status != 0 ) THEN
+  WRITE_LINE( "* ERROR: cannot resolve internal solid id for " // @
+   s_root_geo // " ; status=" // str_from_integer(status) )
+  RETURN
+END IF
+
+WRITE_LINE( "* internal solid id = " // str_from_integer( solid_id(1) ) )
+
+sgm_db_get_num_faces_body( solid_id(1), nfaces, status )
+
+IF ( status != 0 ) THEN
+  WRITE_LINE( "* ERROR: sgm_db_get_num_faces_body failed for " // @
+   s_root_geo // " ; status=" // str_from_integer(status) )
+  RETURN
+END IF
+
+WRITE_LINE( "* number of faces = " // str_from_integer( nfaces ) )
+
+IF ( nfaces <= 0 ) THEN
+  WRITE_LINE( "* INFO: no faces found for " // s_root_geo )
+  RETURN
+END IF
+
+status = sys_allocate_array( faces, 1, nfaces )
+IF ( status != 0 ) THEN
+  WRITE_LINE( "* ERROR: cannot allocate faces array" )
+  RETURN
+END IF
+
+status = sys_allocate_array( dummy, 1, nfaces )
+IF ( status != 0 ) THEN
+  WRITE_LINE( "* ERROR: cannot allocate dummy array" )
+  RETURN
+END IF
+
+sgm_db_get_gen_body_face_ids( solid_id(1), nfaces, faces, dummy, dummy, @
+ status )
+
+IF ( status != 0 ) THEN
+  WRITE_LINE( "* ERROR: sgm_db_get_gen_body_face_ids failed ; status=" // @
+   str_from_integer(status) )
+  RETURN
+END IF
+
+FOR ( j = 1 TO nfaces )
+
+  s_face_name = s_root_geo // "." // str_from_integer( j )
+
+  write_geom_record( s_root_geo, s_root_geo, s_face_name, "SURFACE", @
+   1, i_hchan, i_nchan )
+
+  status = sgm_db_get_num_edges_face( faces(j), num_edges )
+
+  IF ( status != 0 ) THEN
+    WRITE_LINE( "* WARNING: sgm_db_get_num_edges_face failed for " // @
+     s_face_name // " ; status=" // str_from_integer(status) )
+  ELSE
+
+    WRITE_LINE( "* " // s_face_name // " -> edge count = " // @
+     str_from_integer( num_edges ) )
+
+    IF ( num_edges > 0 ) THEN
+
+      status = sys_allocate_array( loop_ids, 1, num_edges )
+      IF ( status != 0 ) THEN
+        WRITE_LINE( "* WARNING: cannot allocate loop_ids for " // @
+         s_face_name )
+      ELSE
+
+        status = sys_allocate_array( edge_ids, 1, num_edges )
+        IF ( status != 0 ) THEN
+          WRITE_LINE( "* WARNING: cannot allocate edge_ids for " // @
+           s_face_name )
+        ELSE
+
+          status = sys_allocate_array( edge_orients, 1, num_edges )
+          IF ( status != 0 ) THEN
+            WRITE_LINE( "* WARNING: cannot allocate edge_orients for " // @
+             s_face_name )
+          ELSE
+
+            status = sgm_db_get_gen_face_edge_ids( faces(j), number_loops, @
+             num_edges, loop_ids, edge_ids, edge_orients )
+
+            IF ( status != 0 ) THEN
+              WRITE_LINE( "* WARNING: sgm_db_get_gen_face_edge_ids failed for " // @
+               s_face_name // " ; status=" // str_from_integer(status) )
+            ELSE
+
+              FOR ( k = 1 TO num_edges )
+
+                s_edge_name = s_face_name // "." // str_from_integer( k )
+
+                write_geom_record( s_root_geo, s_face_name, s_edge_name, @
+                 "EDGE", 2, i_hchan, i_nchan )
+
+              END FOR
+
+            END IF
+
+          END IF
+        END IF
+      END IF
+
+    END IF
+
+  END IF
+
+END FOR
+
+END FUNCTION
+
+
+FUNCTION export_geom_mesh_assoc_tree( s_root_geo, s_hierarchy_csv, s_nodes_csv )
+
+STRING s_root_geo[]
+STRING s_hierarchy_csv[]
+STRING s_nodes_csv[]
+
+INTEGER i_stat
+INTEGER i_hchan
+INTEGER i_nchan
+
+IF ( str_length( s_root_geo ) <= 0 ) THEN
+  WRITE_LINE( "* ERROR: bos root geometry." )
+  RETURN
+END IF
+
+IF ( str_index( s_root_geo, "Solid " ) != 1 ) THEN
+  WRITE_LINE( "* ERROR: Bu surum yalnizca Solid root bekliyor." )
+  RETURN
+END IF
+
+i_stat = text_open( s_hierarchy_csv, "NW", 0, 0, i_hchan )
+IF ( i_stat != 0 ) THEN
+  i_stat = text_open( s_hierarchy_csv, "W", 0, 0, i_hchan )
+END IF
+IF ( i_stat != 0 ) THEN
+  WRITE_LINE( "* ERROR: hierarchy CSV acilamadi -> " // s_hierarchy_csv )
+  RETURN
+END IF
+
+i_stat = text_open( s_nodes_csv, "NW", 0, 0, i_nchan )
+IF ( i_stat != 0 ) THEN
+  i_stat = text_open( s_nodes_csv, "W", 0, 0, i_nchan )
+END IF
+IF ( i_stat != 0 ) THEN
+  WRITE_LINE( "* ERROR: nodes CSV acilamadi -> " // s_nodes_csv )
+  text_close( i_hchan, " " )
+  RETURN
+END IF
+
+csv_write_hierarchy_header( i_hchan )
+csv_write_nodes_header( i_nchan )
+
+WRITE_LINE( "* root geometry = " // s_root_geo )
+
+write_geom_record( s_root_geo, "", s_root_geo, "SOLID", 0, @
+ i_hchan, i_nchan )
+
+export_faces_and_edges_of_solid( s_root_geo, i_hchan, i_nchan )
+
+text_close( i_hchan, " " )
+text_close( i_nchan, " " )
+
+WRITE_LINE( "* hierarchy export tamamlandi -> " // s_hierarchy_csv )
+WRITE_LINE( "* nodes export tamamlandi -> " // s_nodes_csv )
+
+END FUNCTION
